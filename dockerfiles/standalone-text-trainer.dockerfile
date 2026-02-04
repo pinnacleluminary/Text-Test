@@ -1,36 +1,50 @@
-FROM axolotlai/axolotl:main-py3.11-cu128-2.9.1
-COPY --from=ghcr.io/astral-sh/uv:0.9.14 /uv /uvx /bin/
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
 
-ENV UV_SYSTEM_PYTHON=1 \
-    AXOLOTL_DO_NOT_TRACK=1
-
-# Core deps
-RUN uv pip install packaging setuptools wheel awscli pydantic \
-      mlflow huggingface_hub aiohttp requests toml fastapi \
-      uvicorn httpx loguru python-dotenv scipy numpy datasets \
-      tenacity minio pandas tiktoken sentencepiece peft Pillow \
-      PyYAML textstat langcheck detoxify \
-      git+https://github.com/rayonlabs/fiber@2.4.0 \
-      git+https://github.com/huggingface/trl@07b4a84e0a3c8f37a2508fe177615af019782946
-
-RUN uv pip install --no-build-isolation vllm==0.10.2
-
-WORKDIR /workspace/axolotl
-RUN mkdir -p /workspace/axolotl/configs \
-    /workspace/axolotl/outputs \
-    /workspace/axolotl/data \
-    /workspace/input_data 
-
-COPY dockerfiles/patches/axolotl_grpo_rollout_fix.py /workspace/axolotl/src/axolotl/core/trainers/grpo/__init__.py
-COPY dockerfiles/environment_functions/ /workspace/axolotl/src
-COPY core /workspace/core
-COPY miner /workspace/miner
-COPY trainer /workspace/trainer
+# System dependencies
+RUN apt-get update && apt-get install -y \
+    vim \
+    zip \
+    tmux \
+    iotop \
+    nvtop \
+    bmon \
+    wget \
+    nano \
+    zsh \
+    htop \
+    redis-server \
+    && rm -rf /var/lib/apt/lists/*
+# Default dir
+RUN mkdir -p /workspace
+RUN mkdir -p /cache
+RUN mkdir -p /workspace/scripts/datasets
+RUN mkdir -p /app/checkpoints
+WORKDIR /workspace/scripts
+# Copy current folder to /workspace/auto_ml
 COPY scripts /workspace/scripts
-COPY core/config/base.yml /workspace/axolotl/base.yml
-COPY core/config/base_grpo.yml /workspace/axolotl/base_grpo.yml
-COPY core/config/base_environment.yml /workspace/axolotl/base_environment.yml
+# Make entrypoint script executable
+RUN chmod +x /workspace/scripts/entrypoint.sh
+# Pytorch (Auto-selects backend https://docs.astral.sh/uv/guides/integration/pytorch/#automatic-backend-selection)
 
-RUN chmod +x /workspace/scripts/run_text_trainer.sh /workspace/scripts/text_trainer.py
+# Create a virtual environment for data generation
+RUN python -m venv /workspace/axo_py
+RUN bash -c "source /workspace/axo_py/bin/activate && \
+    pip install uv && \
+    pip install -U packaging==23.2 setuptools==75.8.0 wheel ninja && \
+    uv pip install --no-build-isolation axolotl==0.9.1 && \
+    pip install requests==2.32.3 && \
+    deactivate"
 
-ENTRYPOINT ["/workspace/scripts/run_text_trainer.sh"]
+
+# install the main dependencies
+RUN pip install uv && \
+    pip install -U packaging==23.2 setuptools==75.8.0 wheel ninja && \
+    uv pip install -r /workspace/scripts/training_requirements.txt --system && \
+    pip install hf_transfer==0.1.9 && \
+    pip install tenacity==9.1.2 && \
+    pip install tiktoken==0.9.0 && \
+    pip install flash-attn==v2.7.4.post1 --no-build-isolation && \
+    uv pip install vllm==0.8.3 --system && \
+    pip install "fiber @ git+https://github.com/rayonlabs/fiber.git@2.4.0"
+
+ENTRYPOINT ["./entrypoint.sh"]
